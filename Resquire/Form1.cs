@@ -8,6 +8,7 @@ public partial class Form1 : Form
     private int requirementCount = 0;
     private int sessionCount = 0;
     private List<string> recentFiles = new();
+    private List<(string name, string path)> quickProjects = new();
     private int currentTheme = 0;
     private bool isResizing = false;
     private int quickActionsPanelWidth = 188;
@@ -21,7 +22,7 @@ public partial class Form1 : Form
     };
     private readonly Dictionary<string, string> templates = new()
     {
-        { "XML Requirement", "<requirementTitle>Requirement: {filename}</requirementTitle>\n\n<requirement>{content}</requirement>\n\n<avoid>{avoid}</avoid>" }
+        { "XML Requirement", "<general>{boilerplate}</general>\n\n<requirementTitle>Requirement: {filename}</requirementTitle>\n\n<requirement>{content}</requirement>\n\n<avoid>{avoid}</avoid>" }
     };
 
     public Form1()
@@ -36,6 +37,20 @@ public partial class Form1 : Form
 
     private void InitializeForm()
     {
+        // Set form icon from embedded resource
+        try
+        {
+            using var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Resquire.reqsuire_icon.ico");
+            if (stream != null)
+            {
+                this.Icon = new Icon(stream);
+            }
+        }
+        catch
+        {
+            // Ignore icon loading errors
+        }
+        
         cmbTemplate.Items.AddRange(templates.Keys.ToArray());
         cmbTemplate.SelectedIndex = 0;
         lblDirectory.Text = $"SAVE_DIR: {saveDirectory}";
@@ -46,6 +61,7 @@ public partial class Form1 : Form
         this.Load += (s, e) => {
             AdjustTextBoxSizes();
             LoadRecentFiles();
+            LoadQuickProjects();
             UpdateStats();
             ApplyTheme(); // Apply saved theme
             SetupQuickActionsResizing();
@@ -80,6 +96,12 @@ public partial class Form1 : Form
                 {
                     currentTheme = Math.Max(0, Math.Min(themeProp.GetInt32(), themes.Count - 1));
                 }
+                
+                if (settings.TryGetProperty("boilerplate", out var boilerplateProp))
+                {
+                    // Load boilerplate after UI is initialized
+                    this.Load += (s, e) => txtBoilerplate.Text = boilerplateProp.GetString() ?? "";
+                }
             }
             else
             {
@@ -105,7 +127,8 @@ public partial class Form1 : Form
             var settings = new
             {
                 saveDirectory = saveDirectory,
-                theme = currentTheme
+                theme = currentTheme,
+                boilerplate = txtBoilerplate?.Text ?? ""
             };
             
             string json = System.Text.Json.JsonSerializer.Serialize(settings, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
@@ -130,20 +153,22 @@ public partial class Form1 : Form
 
     private void AdjustTextBoxSizes()
     {
-        if (txtContent == null || txtAvoid == null || lblAvoid == null) return;
+        if (txtContent == null || txtAvoid == null || txtBoilerplate == null || lblAvoid == null || lblBoilerplate == null) return;
         
         // Calculate available space between content label and controls at bottom
         int topSpace = txtContent.Top;
         int bottomSpace = this.ClientSize.Height - cmbTemplate.Top + 20; // Add some padding
         int availableHeight = this.ClientSize.Height - topSpace - bottomSpace;
         
-        // Split the space roughly 50/50
-        int contentHeight = availableHeight / 2 - 10; // 10px gap
-        int avoidHeight = availableHeight - contentHeight - 28; // Account for label and spacing
+        // Split the space into 3 sections: content 40%, avoid 30%, boilerplate 30%
+        int contentHeight = (int)(availableHeight * 0.4) - 10; // 40% with gap
+        int avoidHeight = (int)(availableHeight * 0.3) - 18; // 30% with label and gap
+        int boilerplateHeight = (int)(availableHeight * 0.3) - 18; // 30% with label and gap
         
         // Ensure minimum sizes
         contentHeight = Math.Max(contentHeight, 80);
         avoidHeight = Math.Max(avoidHeight, 60);
+        boilerplateHeight = Math.Max(boilerplateHeight, 60);
         
         // Update content box
         txtContent.Height = contentHeight;
@@ -155,6 +180,14 @@ public partial class Form1 : Form
         lblAvoid.Top = avoidLabelTop;
         txtAvoid.Top = avoidBoxTop;
         txtAvoid.Height = avoidHeight;
+        
+        // Update boilerplate label and box positions
+        int boilerplateLabelTop = txtAvoid.Bottom + 8;
+        int boilerplateBoxTop = boilerplateLabelTop + lblBoilerplate.Height + 2;
+        
+        lblBoilerplate.Top = boilerplateLabelTop;
+        txtBoilerplate.Top = boilerplateBoxTop;
+        txtBoilerplate.Height = boilerplateHeight;
     }
 
     private void InitializeStatusTimer()
@@ -258,6 +291,7 @@ public partial class Form1 : Form
             if (File.Exists(recentPath))
             {
                 recentFiles = File.ReadAllLines(recentPath).Take(10).ToList();
+                CleanupRecentFiles();
                 UpdateRecentFilesList();
             }
         }
@@ -302,6 +336,109 @@ public partial class Form1 : Form
         }
     }
 
+    private void CleanupRecentFiles()
+    {
+        try
+        {
+            // Remove files that no longer exist
+            var existingFiles = recentFiles.Where(File.Exists).ToList();
+            bool hasChanges = existingFiles.Count != recentFiles.Count;
+            
+            // Save the cleaned list if changes were made
+            if (hasChanges)
+            {
+                int removedCount = recentFiles.Count - existingFiles.Count;
+                recentFiles = existingFiles;
+                SaveRecentFiles();
+                ShowStatus($"[CLEANUP] Removed {removedCount} missing files", Color.Orange);
+            }
+        }
+        catch
+        {
+            // Ignore cleanup errors
+        }
+    }
+
+    private void LoadQuickProjects()
+    {
+        try
+        {
+            string projectsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Resquire", "projects.txt");
+            if (File.Exists(projectsPath))
+            {
+                var lines = File.ReadAllLines(projectsPath);
+                quickProjects.Clear();
+                int originalCount = 0;
+                
+                foreach (var line in lines.Take(10))
+                {
+                    originalCount++;
+                    var parts = line.Split('|');
+                    if (parts.Length == 2 && Directory.Exists(parts[1]))
+                    {
+                        quickProjects.Add((parts[0], parts[1]));
+                    }
+                }
+                
+                // Save cleaned list if directories were removed
+                if (quickProjects.Count < originalCount)
+                {
+                    SaveQuickProjects();
+                    int removedCount = originalCount - quickProjects.Count;
+                    ShowStatus($"[CLEANUP] Removed {removedCount} missing projects", Color.Orange);
+                }
+                
+                UpdateQuickProjectsList();
+            }
+        }
+        catch
+        {
+            // Ignore load errors
+        }
+    }
+
+    private void AddToQuickProjects(string projectName, string projectPath)
+    {
+        // Remove if already exists
+        quickProjects.RemoveAll(p => p.path.Equals(projectPath, StringComparison.OrdinalIgnoreCase));
+        
+        // Add to top
+        quickProjects.Insert(0, (projectName, projectPath));
+        
+        // Keep only 10
+        if (quickProjects.Count > 10) 
+            quickProjects.RemoveAt(10);
+        
+        UpdateQuickProjectsList();
+        SaveQuickProjects();
+    }
+
+    private void UpdateQuickProjectsList()
+    {
+        lstQuickProjects.Items.Clear();
+        foreach (var project in quickProjects)
+        {
+            string displayName = project.name;
+            if (displayName.Length > 20)
+                displayName = displayName.Substring(0, 17) + "...";
+            lstQuickProjects.Items.Add(displayName);
+        }
+    }
+
+    private void SaveQuickProjects()
+    {
+        try
+        {
+            string projectsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Resquire", "projects.txt");
+            var lines = quickProjects.Select(p => $"{p.name}|{p.path}");
+            File.WriteAllLines(projectsPath, lines);
+        }
+        catch
+        {
+            // Ignore save errors
+        }
+    }
+
     private void UpdateStats()
     {
         lblStats.Text = $"SESSION: {sessionCount}\nTOTAL: {requirementCount}";
@@ -323,9 +460,51 @@ public partial class Form1 : Form
         }
     }
 
+    private void lstQuickProjects_DoubleClick(object sender, EventArgs e)
+    {
+        if (lstQuickProjects.SelectedIndex >= 0 && lstQuickProjects.SelectedIndex < quickProjects.Count)
+        {
+            var project = quickProjects[lstQuickProjects.SelectedIndex];
+            if (Directory.Exists(project.path))
+            {
+                saveDirectory = project.path;
+                lblDirectory.Text = $"SAVE_DIR: {saveDirectory}";
+                UpdateTitleBar();
+                ShowStatus($"[PROJECT] {project.name}", Color.Lime);
+            }
+        }
+    }
+
+    private void btnAddProject_Click(object sender, EventArgs e)
+    {
+        if (!string.IsNullOrEmpty(saveDirectory) && Directory.Exists(saveDirectory))
+        {
+            string projectName = ExtractProjectName(saveDirectory);
+            AddToQuickProjects(projectName, saveDirectory);
+            ShowStatus($"[ADDED] {projectName}", Color.Lime);
+        }
+        else
+        {
+            ShowStatus("No valid directory selected", Color.Orange);
+        }
+    }
+
+    private void removeProjectToolStripMenuItem_Click(object sender, EventArgs e)
+    {
+        if (lstQuickProjects.SelectedIndex >= 0 && lstQuickProjects.SelectedIndex < quickProjects.Count)
+        {
+            var project = quickProjects[lstQuickProjects.SelectedIndex];
+            quickProjects.RemoveAt(lstQuickProjects.SelectedIndex);
+            UpdateQuickProjectsList();
+            SaveQuickProjects();
+            ShowStatus($"[REMOVED] {project.name}", Color.Orange);
+        }
+    }
+
     private void Form1_KeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.KeyCode >= Keys.F1 && e.KeyCode <= Keys.F5)
+        // Only handle F1-F5 themes when Alt is NOT pressed (to allow Alt+F4 to close app)
+        if (e.KeyCode >= Keys.F1 && e.KeyCode <= Keys.F5 && !e.Alt)
         {
             int themeIndex = e.KeyCode - Keys.F1;
             if (themeIndex < themes.Count)
@@ -351,6 +530,8 @@ public partial class Form1 : Form
         txtContent.ForeColor = colors.fg;
         txtAvoid.BackColor = colors.bg;
         txtAvoid.ForeColor = colors.fg;
+        txtBoilerplate.BackColor = colors.bg;
+        txtBoilerplate.ForeColor = colors.fg;
         
         // ComboBox
         cmbTemplate.BackColor = colors.bg;
@@ -361,12 +542,15 @@ public partial class Form1 : Form
         btnSave.ForeColor = colors.fg;
         btnSelectDirectory.BackColor = colors.accent;
         btnSelectDirectory.ForeColor = colors.fg;
+        btnAddProject.BackColor = colors.accent;
+        btnAddProject.ForeColor = colors.fg;
         
         // Labels
         lblContent.ForeColor = colors.fg;
         lblAvoid.ForeColor = colors.fg;
+        lblBoilerplate.ForeColor = colors.fg;
         lblTemplate.ForeColor = colors.fg;
-        lblDirectory.ForeColor = colors.dark;
+        lblDirectory.ForeColor = colors.fg; // Changed from colors.dark to colors.fg for better contrast
         lblDirectory.BackColor = colors.bg; // Ensure proper background
         lblStatus.ForeColor = colors.fg;
         
@@ -374,8 +558,11 @@ public partial class Form1 : Form
         pnlQuickActions.BackColor = colors.dark;
         lblQuickActions.ForeColor = colors.fg;
         lstRecentFiles.BackColor = colors.bg;
-        lstRecentFiles.ForeColor = colors.dark;
-        lblStats.ForeColor = colors.dark;
+        lstRecentFiles.ForeColor = colors.fg; // Changed from colors.dark to colors.fg for better contrast
+        lblQuickProjects.ForeColor = colors.fg;
+        lstQuickProjects.BackColor = colors.bg;
+        lstQuickProjects.ForeColor = colors.fg;
+        lblStats.ForeColor = colors.fg; // Changed from colors.dark to colors.fg for better contrast
         
         // Progress bar
         pnlProgressBar.BackColor = colors.bg;
@@ -441,12 +628,14 @@ public partial class Form1 : Form
         int availableWidth = panelLeft - 24; // Account for margins
         txtContent.Width = availableWidth;
         txtAvoid.Width = availableWidth;
+        txtBoilerplate.Width = availableWidth;
         pnlProgressBar.Width = availableWidth;
         
         // Reposition buttons to be left of the Quick Actions panel
-        int buttonX = panelLeft - 87; // 75px button width + 12px margin
+        int buttonX = panelLeft - 102; // Account for + button: 60px browse + 23px + button + 19px margins
         btnSave.Left = buttonX;
         btnSelectDirectory.Left = buttonX;
+        btnAddProject.Left = buttonX + 65; // 60px browse width + 5px spacing
         
         // Adjust status and directory label widths to not overlap buttons
         lblStatus.Width = buttonX - lblStatus.Left - 12;
@@ -474,7 +663,7 @@ public partial class Form1 : Form
                 Directory.Exists(Path.Combine(directoryPath, "Requirements")))
             {
                 // Current directory is the project directory
-                return Path.GetFileName(directoryPath).ToUpper();
+                return CleanProjectName(Path.GetFileName(directoryPath));
             }
             
             // Check if current directory IS "Resquirements" or "Requirements"
@@ -486,17 +675,30 @@ public partial class Form1 : Form
                 string? parentPath = Path.GetDirectoryName(directoryPath);
                 if (!string.IsNullOrEmpty(parentPath))
                 {
-                    return Path.GetFileName(parentPath).ToUpper();
+                    return CleanProjectName(Path.GetFileName(parentPath));
                 }
             }
             
             // Fallback: use the current directory name
-            return Path.GetFileName(directoryPath).ToUpper();
+            return CleanProjectName(Path.GetFileName(directoryPath));
         }
         catch
         {
             return "REQUIREMENT_GENERATOR";
         }
+    }
+
+    private string CleanProjectName(string rawName)
+    {
+        string projectName = rawName.ToUpper();
+        
+        // Remove "AmstedDigital." prefix if present
+        if (projectName.StartsWith("AMSTEDDIGITAL.", StringComparison.OrdinalIgnoreCase))
+        {
+            projectName = projectName.Substring("AMSTEDDIGITAL.".Length);
+        }
+        
+        return projectName;
     }
 
     private void txtContent_KeyDown(object sender, KeyEventArgs e)
@@ -540,7 +742,8 @@ public partial class Form1 : Form
         string formattedContent = template
             .Replace("{filename}", fileNameWithoutExtension)
             .Replace("{content}", txtContent.Text.Trim())
-            .Replace("{avoid}", txtAvoid.Text.Trim());
+            .Replace("{avoid}", txtAvoid.Text.Trim())
+            .Replace("{boilerplate}", txtBoilerplate.Text.Trim());
         string filePath = Path.Combine(saveDirectory, fileName);
 
         try
@@ -555,6 +758,7 @@ public partial class Form1 : Form
             ClearDraft();
             txtContent.Clear();
             txtAvoid.Clear();
+            // Note: txtBoilerplate is NOT cleared - it persists for next use
             txtContent.Focus();
         }
         catch (Exception ex)

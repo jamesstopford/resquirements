@@ -7,6 +7,11 @@
         <UseWindowsForms>true</UseWindowsForms>
         <ImplicitUsings>enable</ImplicitUsings>
         <EnableWindowsTargeting>true</EnableWindowsTargeting>
+        <ApplicationIcon>reqsuire_icon.ico</ApplicationIcon>
     </PropertyGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="reqsuire_icon.ico" />
+    </ItemGroup>
 
 </Project>
