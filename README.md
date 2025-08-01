@@ -171,7 +171,6 @@ Built with ❤️ using:
 - .NET 9.0
 - Windows Forms
 - C# 13
+- Claude Code
 
 ---
-
-*Resquire - Because requirements should be quick, structured, and beautiful.*

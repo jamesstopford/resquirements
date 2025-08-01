@@ -14,4 +14,10 @@
         <EmbeddedResource Include="reqsuire_icon.ico" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Content Include="..\README.md">
+        <Link>README.md</Link>
+      </Content>
+    </ItemGroup>
+
 </Project>
